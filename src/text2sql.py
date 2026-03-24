@@ -84,7 +84,9 @@ class OpenAICompatibleGenerator:
 class Text2SQLGenerator:
     def __init__(self, schema_text: str) -> None:
         self.schema_text = schema_text
-        self.backend = os.getenv("SAFETEXT2SQL_BACKEND", "rule").lower()
+        self.requested_backend = os.getenv("SAFETEXT2SQL_BACKEND", "rule").lower()
+        self.backend = self.requested_backend
+        self.last_error = ""
         self.fallback = RuleBasedGenerator()
 
         if self.backend == "openai" and os.getenv("OPENAI_API_KEY"):
@@ -92,11 +94,15 @@ class Text2SQLGenerator:
         else:
             self.backend = "rule"
             self.generator = self.fallback
+            if self.requested_backend == "openai" and not os.getenv("OPENAI_API_KEY"):
+                self.last_error = "OPENAI_API_KEY is not set"
 
     def generate(self, question: str) -> str:
         try:
+            self.last_error = ""
             return self.generator.generate(question)
-        except RuntimeError:
+        except RuntimeError as exc:
+            self.last_error = str(exc)
             self.backend = "rule"
             self.generator = self.fallback
             return self.fallback.generate(question)

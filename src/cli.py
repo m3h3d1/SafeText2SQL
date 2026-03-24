@@ -44,6 +44,8 @@ def main() -> None:
         execution = executor.execute(sql)
 
     print(f"backend: {generator.backend}")
+    print(f"requested_backend: {generator.requested_backend}")
+    print(f"backend_error: {generator.last_error or 'None'}")
     print(f"filter_decision: {filter_result.decision}")
     print(f"filter_reasons: {filter_result.reasons}")
     print(f"generated_sql: {sql}")

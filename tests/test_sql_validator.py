@@ -20,12 +20,20 @@ class SQLValidatorTests(unittest.TestCase):
         result = self.validator.validate("SELECT name, age FROM patients WHERE age > 30")
         self.assertTrue(result.allowed)
 
+    def test_safe_select_with_trailing_semicolon_is_allowed(self) -> None:
+        result = self.validator.validate("SELECT name, age FROM patients WHERE age > 30;")
+        self.assertTrue(result.allowed)
+
     def test_comment_is_blocked(self) -> None:
         result = self.validator.validate("SELECT name FROM patients -- comment")
         self.assertFalse(result.allowed)
 
     def test_disallowed_table_is_blocked(self) -> None:
         result = self.validator.validate("SELECT secret FROM admins")
+        self.assertFalse(result.allowed)
+
+    def test_stacked_statements_are_blocked(self) -> None:
+        result = self.validator.validate("SELECT name FROM patients; DELETE FROM patients")
         self.assertFalse(result.allowed)
 
 

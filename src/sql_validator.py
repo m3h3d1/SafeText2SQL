@@ -19,19 +19,28 @@ class SQLValidator:
     def __init__(self, policy_path: str) -> None:
         self.policy = yaml.safe_load(Path(policy_path).read_text())
 
+    def _normalize_sql(self, sql: str) -> str:
+        normalized = sql.strip()
+        if normalized.endswith(";"):
+            body = normalized[:-1].strip()
+            if ";" not in body:
+                return body
+        return normalized
+
     def validate(self, sql: str) -> ValidationResult:
         reasons: list[str] = []
+        normalized_sql = self._normalize_sql(sql)
 
         for token in self.policy.get("blocked_tokens", []):
-            if token in sql:
+            if token in normalized_sql:
                 reasons.append(f"blocked token detected: {token}")
 
         for pattern in self.policy.get("blocked_regex", []):
-            if re.search(pattern, sql):
+            if re.search(pattern, normalized_sql):
                 reasons.append(f"blocked pattern detected: {pattern}")
 
         try:
-            tree = sqlglot.parse_one(sql, read="sqlite")
+            tree = sqlglot.parse_one(normalized_sql, read="sqlite")
         except Exception as exc:  # pragma: no cover - starter scaffold
             return ValidationResult(False, [f"parse error: {exc}"])
 
