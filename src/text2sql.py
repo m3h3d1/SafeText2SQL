@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -30,6 +31,7 @@ class OpenAICompatibleGenerator:
         self.api_key = os.getenv("OPENAI_API_KEY", "")
         self.base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
         self.model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.max_retries = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
 
     def _build_prompt(self, question: str) -> str:
         return (
@@ -71,11 +73,29 @@ class OpenAICompatibleGenerator:
             },
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
-            raise RuntimeError(f"model request failed: {exc}") from exc
+
+        last_exc: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError as exc:
+                last_exc = exc
+                if exc.code == 429 and attempt < self.max_retries:
+                    retry_after = exc.headers.get("Retry-After")
+                    delay = float(retry_after) if retry_after else float(2 ** attempt)
+                    time.sleep(delay)
+                    continue
+                raise RuntimeError(f"model request failed: {exc}") from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                last_exc = exc
+                if attempt < self.max_retries:
+                    time.sleep(float(2 ** attempt))
+                    continue
+                raise RuntimeError(f"model request failed: {exc}") from exc
+        else:  # pragma: no cover - defensive fallback
+            raise RuntimeError(f"model request failed: {last_exc}")
 
         content = body["choices"][0]["message"]["content"]
         return self._strip_response(content)
@@ -85,24 +105,26 @@ class Text2SQLGenerator:
     def __init__(self, schema_text: str) -> None:
         self.schema_text = schema_text
         self.requested_backend = os.getenv("SAFETEXT2SQL_BACKEND", "rule").lower()
-        self.backend = self.requested_backend
+        self.backend = "rule"
         self.last_error = ""
         self.fallback = RuleBasedGenerator()
+        self.remote_generator = None
 
-        if self.backend == "openai" and os.getenv("OPENAI_API_KEY"):
-            self.generator = OpenAICompatibleGenerator(schema_text)
-        else:
-            self.backend = "rule"
-            self.generator = self.fallback
-            if self.requested_backend == "openai" and not os.getenv("OPENAI_API_KEY"):
-                self.last_error = "OPENAI_API_KEY is not set"
+        if self.requested_backend == "openai" and os.getenv("OPENAI_API_KEY"):
+            self.remote_generator = OpenAICompatibleGenerator(schema_text)
+        elif self.requested_backend == "openai":
+            self.last_error = "OPENAI_API_KEY is not set"
 
     def generate(self, question: str) -> str:
-        try:
-            self.last_error = ""
-            return self.generator.generate(question)
-        except RuntimeError as exc:
-            self.last_error = str(exc)
-            self.backend = "rule"
-            self.generator = self.fallback
-            return self.fallback.generate(question)
+        self.last_error = ""
+
+        if self.requested_backend == "openai" and self.remote_generator is not None:
+            try:
+                sql = self.remote_generator.generate(question)
+                self.backend = "openai"
+                return sql
+            except RuntimeError as exc:
+                self.last_error = str(exc)
+
+        self.backend = "rule"
+        return self.fallback.generate(question)

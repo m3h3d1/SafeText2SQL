@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import sqlite3
+import time
+from collections import Counter
 from pathlib import Path
 
 from input_filter import InputFilter
@@ -33,6 +37,25 @@ def load_prompts(name: str) -> list[dict]:
 
 def load_schema_text() -> str:
     return SCHEMA_PATH.read_text().strip()
+
+
+def get_prompt_files(mode: str) -> list[str]:
+    if mode == "remote-smoke":
+        return ["benign.json", "injection.json", "triggers.json"]
+    return ["benign.json", "injection.json", "triggers.json"]
+
+
+def select_prompt_items(prompt_file: str, items: list[dict], mode: str) -> list[dict]:
+    if mode != "remote-smoke":
+        return items
+
+    if prompt_file == "benign.json":
+        return items[:2]
+    if prompt_file == "injection.json":
+        return items[:2]
+    if prompt_file == "triggers.json":
+        return items[:2]
+    return items
 
 
 def determine_observed_behavior(result: dict) -> str:
@@ -91,11 +114,20 @@ def build_summary(results: list[dict]) -> dict:
     trigger_total = 0
     trigger_flagged = 0
     warnings = 0
+    backend_counts: Counter[str] = Counter()
+    fallback_cases = 0
+    backend_errors = 0
 
     for item in results:
         observed = determine_observed_behavior(item)
+        backend_counts[item["generator_backend"]] += 1
         if expected_behavior_matches(item["expected_behavior"], observed):
             matched += 1
+
+        if item["requested_backend"] != item["generator_backend"]:
+            fallback_cases += 1
+        if item["generator_error"]:
+            backend_errors += 1
 
         if item["filter"]["decision"] == "warn":
             warnings += 1
@@ -121,6 +153,9 @@ def build_summary(results: list[dict]) -> dict:
         "injection_block_rate": injection_blocked / injection_total if injection_total else 0.0,
         "trigger_flag_rate": trigger_flagged / trigger_total if trigger_total else 0.0,
         "warning_rate": warnings / total if total else 0.0,
+        "backend_counts": dict(backend_counts),
+        "fallback_rate": fallback_cases / total if total else 0.0,
+        "backend_error_rate": backend_errors / total if total else 0.0,
     }
 
 
@@ -135,6 +170,9 @@ def write_report(results: list[dict], summary: dict) -> None:
         f"- Injection block rate: {summary['injection_block_rate']:.2f}",
         f"- Trigger flag rate: {summary['trigger_flag_rate']:.2f}",
         f"- Warning rate: {summary['warning_rate']:.2f}",
+        f"- Backend counts: `{summary['backend_counts']}`",
+        f"- Fallback rate: {summary['fallback_rate']:.2f}",
+        f"- Backend error rate: {summary['backend_error_rate']:.2f}",
         "",
         "## Cases",
     ]
@@ -160,7 +198,7 @@ def write_report(results: list[dict], summary: dict) -> None:
     REPORT_PATH.write_text("\n".join(lines))
 
 
-def run() -> tuple[list[dict], dict]:
+def run(mode: str = "full", remote_delay_seconds: float = 0.0) -> tuple[list[dict], dict]:
     initialize_db()
 
     input_filter = InputFilter()
@@ -170,10 +208,11 @@ def run() -> tuple[list[dict], dict]:
     probe = ModelProbe()
 
     results: list[dict] = []
-    prompt_files = ["benign.json", "injection.json", "triggers.json"]
+    prompt_files = get_prompt_files(mode)
 
     for prompt_file in prompt_files:
-        for item in load_prompts(prompt_file):
+        prompt_items = select_prompt_items(prompt_file, load_prompts(prompt_file), mode)
+        for index, item in enumerate(prompt_items):
             question = item["question"]
             filter_result = input_filter.assess(question)
 
@@ -208,6 +247,9 @@ def run() -> tuple[list[dict], dict]:
                 }
             )
 
+            if generator.requested_backend == "openai" and index < len(prompt_items) - 1 and remote_delay_seconds > 0:
+                time.sleep(remote_delay_seconds)
+
     for item in results:
         item["observed_behavior"] = determine_observed_behavior(item)
 
@@ -219,7 +261,22 @@ def run() -> tuple[list[dict], dict]:
 
 
 if __name__ == "__main__":
-    results, summary = run()
+    parser = argparse.ArgumentParser(description="Run SafeText2SQL evaluation.")
+    parser.add_argument(
+        "--mode",
+        choices=["full", "remote-smoke"],
+        default=os.getenv("SAFETEXT2SQL_EVAL_MODE", "full"),
+        help="Evaluation mode. Use remote-smoke for a smaller remote-model benchmark.",
+    )
+    parser.add_argument(
+        "--remote-delay-seconds",
+        type=float,
+        default=float(os.getenv("SAFETEXT2SQL_REMOTE_DELAY_SECONDS", "0")),
+        help="Delay between remote requests to reduce rate limiting.",
+    )
+    args = parser.parse_args()
+
+    results, summary = run(mode=args.mode, remote_delay_seconds=args.remote_delay_seconds)
     for item in results:
         print(f"{item['id']} [{item['category']}] -> {item['filter']['decision']}")
     print(json.dumps(summary, indent=2))

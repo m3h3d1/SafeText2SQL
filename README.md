@@ -26,6 +26,7 @@ SafeText2SQL is a small prototype for defending Text-to-SQL pipelines against:
 2. Initialize the SQLite database with `data/schema.sql`.
 3. Run `src/evaluate.py` to exercise the baseline pipeline.
 4. Run `src/cli.py "your question"` for a single interactive request.
+5. For rate-limited remote models, use `src/evaluate.py --mode remote-smoke --remote-delay-seconds 2`.
 
 ## Model Backends
 - Default: rule-based fallback for local development.
@@ -42,6 +43,7 @@ Example:
 - `results/evaluation.json` detailed per-case results
 - `results/summary.json` aggregate metrics
 - `results/report.md` human-readable evaluation report
+- summaries include backend usage, fallback rate, and backend error rate
 
 ## Current Scope
 - SQLite only
