@@ -8,6 +8,7 @@ from pathlib import Path
 
 from evaluate import build_output_paths, load_schema_text, sanitize_name
 from input_filter import InputFilter
+from intent_validator import IntentValidator
 from model_probe import ModelProbe
 from query_rewriter import QueryRewriter
 from safe_executor import SafeExecutor
@@ -57,6 +58,7 @@ def execute_pipeline(
     generator: Text2SQLGenerator,
     rewriter: QueryRewriter,
     validator: SQLValidator,
+    intent_validator: IntentValidator,
     executor: SafeExecutor,
 ) -> dict:
     filter_result = input_filter.assess(question)
@@ -64,10 +66,12 @@ def execute_pipeline(
     rewrite_result = rewriter.rewrite(generated_sql)
     final_sql = rewrite_result.sql if rewrite_result.rewritten else generated_sql
     validation = validator.validate(final_sql)
+    intent = intent_validator.validate(question, validation.normalized_sql)
 
+    executable_sql = validation.normalized_sql
     execution = None
-    if filter_result.decision != "block" and validation.allowed:
-        execution = executor.execute(final_sql)
+    if filter_result.decision != "block" and validation.allowed and intent.allowed:
+        execution = executor.execute(executable_sql)
 
     return {
         "question": question,
@@ -78,7 +82,9 @@ def execute_pipeline(
         "generated_sql": generated_sql,
         "rewrite": rewrite_result.__dict__,
         "final_sql": final_sql,
+        "executable_sql": executable_sql,
         "validation": validation.__dict__,
+        "intent": intent.__dict__,
         "execution": None if execution is None else execution.__dict__,
     }
 
@@ -106,6 +112,9 @@ def write_probe_report(results: list[dict], summary: dict, report_path: Path) ->
                 f"- Triggered question: `{item['triggered']['question']}`",
                 f"- Clean SQL: `{item['clean']['final_sql']}`",
                 f"- Triggered SQL: `{item['triggered']['final_sql']}`",
+                f"- Clean intent allowed: `{item['clean']['intent']['allowed']}`",
+                f"- Triggered intent allowed: `{item['triggered']['intent']['allowed']}`",
+                f"- Probe categories: `{' | '.join(probe['categories']) if probe['categories'] else 'none'}`",
                 f"- Probe score: `{probe['score']}`",
                 f"- Suspicious: `{probe['suspicious']}`",
                 f"- Reasons: `{' | '.join(probe['reasons'])}`",
@@ -122,6 +131,7 @@ def run() -> tuple[list[dict], dict]:
     generator = Text2SQLGenerator(load_schema_text())
     rewriter = QueryRewriter(str(POLICY_PATH))
     validator = SQLValidator(str(POLICY_PATH))
+    intent_validator = IntentValidator()
     executor = SafeExecutor(str(DB_PATH))
     probe = ModelProbe()
 
@@ -147,6 +157,7 @@ def run() -> tuple[list[dict], dict]:
             generator=generator,
             rewriter=rewriter,
             validator=validator,
+            intent_validator=intent_validator,
             executor=executor,
         )
         backend_counts[clean["backend"]] += 1
@@ -159,6 +170,7 @@ def run() -> tuple[list[dict], dict]:
             generator=generator,
             rewriter=rewriter,
             validator=validator,
+            intent_validator=intent_validator,
             executor=executor,
         )
         backend_counts[triggered["backend"]] += 1
@@ -172,6 +184,8 @@ def run() -> tuple[list[dict], dict]:
             triggered_validation_allowed=triggered["validation"]["allowed"],
             clean_execution_ok=None if clean["execution"] is None else clean["execution"]["executed"],
             triggered_execution_ok=None if triggered["execution"] is None else triggered["execution"]["executed"],
+            clean_intent_allowed=clean["intent"]["allowed"],
+            triggered_intent_allowed=triggered["intent"]["allowed"],
         )
         if probe_result.suspicious:
             suspicious_cases += 1

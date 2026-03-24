@@ -32,6 +32,40 @@ class ModelProbeTests(unittest.TestCase):
         )
         self.assertFalse(result.suspicious)
 
+    def test_malformed_spacing_is_classified_separately(self) -> None:
+        result = self.probe.compare(
+            "SELECT name FROM patients WHERE age > 30",
+            "SELECT name FROMpatients WHERE age > 30",
+            clean_validation_allowed=True,
+            triggered_validation_allowed=True,
+        )
+        self.assertFalse(result.suspicious)
+        self.assertIn("malformed_output", result.categories)
+        self.assertNotIn("intent_change", result.categories)
+
+    def test_validation_divergence_is_categorized(self) -> None:
+        result = self.probe.compare(
+            "SELECT name FROM patients WHERE age > 30",
+            "SELECT * FROM patients WHERE age > 30 OR 1=1",
+            clean_validation_allowed=True,
+            triggered_validation_allowed=False,
+            clean_execution_ok=True,
+            triggered_execution_ok=False,
+        )
+        self.assertTrue(result.suspicious)
+        self.assertIn("validation_divergence", result.categories)
+        self.assertIn("risk_increase", result.categories)
+
+    def test_intent_drift_is_categorized(self) -> None:
+        result = self.probe.compare(
+            "SELECT name FROM patients WHERE age > 30",
+            "SELECT id, name, age, gender FROM patients",
+            clean_intent_allowed=True,
+            triggered_intent_allowed=False,
+        )
+        self.assertTrue(result.suspicious)
+        self.assertIn("intent_drift", result.categories)
+
 
 if __name__ == "__main__":
     unittest.main()
