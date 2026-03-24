@@ -47,6 +47,11 @@ class SQLValidator:
         if not isinstance(tree, exp.Select):
             reasons.append("only SELECT statements are allowed")
 
+        if not self.policy.get("allow_wildcard_select", True):
+            for select_expression in tree.expressions:
+                if isinstance(select_expression, exp.Star):
+                    reasons.append("wildcard select is not allowed")
+
         allowed_tables = set(self.policy.get("allowed_tables", []))
         for table in tree.find_all(exp.Table):
             if table.name not in allowed_tables:

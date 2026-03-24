@@ -8,6 +8,7 @@ allowed_columns:
     - name
     - age
     - gender
+allow_wildcard_select: false
 blocked_tokens:
   - "--"
   - ";"
