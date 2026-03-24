@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import time
 from collections import Counter
@@ -50,12 +51,31 @@ def select_prompt_items(prompt_file: str, items: list[dict], mode: str) -> list[
         return items
 
     if prompt_file == "benign.json":
-        return items[:2]
+        return items[:1]
     if prompt_file == "injection.json":
-        return items[:2]
+        return items[:1]
     if prompt_file == "triggers.json":
-        return items[:2]
+        return items[:1]
     return items
+
+
+def sanitize_name(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-").lower() or "default"
+
+
+def build_output_paths(mode: str, requested_backend: str, model_name: str) -> tuple[Path, Path, Path]:
+    if mode == "full" and requested_backend == "rule":
+        return RESULTS_PATH, SUMMARY_PATH, REPORT_PATH
+
+    mode_part = sanitize_name(mode)
+    backend_part = sanitize_name(requested_backend)
+    model_part = sanitize_name(model_name)
+    stem = f"{mode_part}-{backend_part}-{model_part}"
+    return (
+        ROOT / "results" / f"evaluation-{stem}.json",
+        ROOT / "results" / f"summary-{stem}.json",
+        ROOT / "results" / f"report-{stem}.md",
+    )
 
 
 def determine_observed_behavior(result: dict) -> str:
@@ -159,7 +179,7 @@ def build_summary(results: list[dict]) -> dict:
     }
 
 
-def write_report(results: list[dict], summary: dict) -> None:
+def write_report(results: list[dict], summary: dict, report_path: Path) -> None:
     lines = [
         "# SafeText2SQL Evaluation Report",
         "",
@@ -195,7 +215,7 @@ def write_report(results: list[dict], summary: dict) -> None:
             ]
         )
 
-    REPORT_PATH.write_text("\n".join(lines))
+    report_path.write_text("\n".join(lines))
 
 
 def run(mode: str = "full", remote_delay_seconds: float = 0.0) -> tuple[list[dict], dict]:
@@ -206,6 +226,11 @@ def run(mode: str = "full", remote_delay_seconds: float = 0.0) -> tuple[list[dic
     validator = SQLValidator(str(POLICY_PATH))
     executor = SafeExecutor(str(DB_PATH))
     probe = ModelProbe()
+    results_path, summary_path, report_path = build_output_paths(
+        mode=mode,
+        requested_backend=generator.requested_backend,
+        model_name=os.getenv("OPENAI_MODEL", "rule"),
+    )
 
     results: list[dict] = []
     prompt_files = get_prompt_files(mode)
@@ -253,10 +278,14 @@ def run(mode: str = "full", remote_delay_seconds: float = 0.0) -> tuple[list[dic
     for item in results:
         item["observed_behavior"] = determine_observed_behavior(item)
 
-    RESULTS_PATH.write_text(json.dumps(results, indent=2))
+    results_path.write_text(json.dumps(results, indent=2))
     summary = build_summary(results)
-    SUMMARY_PATH.write_text(json.dumps(summary, indent=2))
-    write_report(results, summary)
+    summary_path.write_text(json.dumps(summary, indent=2))
+    write_report(results, summary, report_path)
+    summary["results_path"] = str(results_path)
+    summary["summary_path"] = str(summary_path)
+    summary["report_path"] = str(report_path)
+    summary_path.write_text(json.dumps(summary, indent=2))
     return results, summary
 
 
