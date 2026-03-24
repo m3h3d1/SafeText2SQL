@@ -6,6 +6,7 @@ from pathlib import Path
 
 from evaluate import load_schema_text
 from input_filter import InputFilter
+from query_rewriter import QueryRewriter
 from safe_executor import SafeExecutor
 from sql_validator import SQLValidator
 from text2sql import Text2SQLGenerator
@@ -33,22 +34,28 @@ def main() -> None:
 
     input_filter = InputFilter()
     generator = Text2SQLGenerator(load_schema_text())
+    rewriter = QueryRewriter(str(POLICY_PATH))
     validator = SQLValidator(str(POLICY_PATH))
     executor = SafeExecutor(str(DB_PATH))
 
     filter_result = input_filter.assess(args.question)
-    sql = generator.generate(args.question)
-    validation = validator.validate(sql)
+    generated_sql = generator.generate(args.question)
+    rewrite = rewriter.rewrite(generated_sql)
+    final_sql = rewrite.sql if rewrite.rewritten else generated_sql
+    validation = validator.validate(final_sql)
     execution = None
     if filter_result.decision != "block" and validation.allowed:
-        execution = executor.execute(sql)
+        execution = executor.execute(final_sql)
 
     print(f"backend: {generator.backend}")
     print(f"requested_backend: {generator.requested_backend}")
     print(f"backend_error: {generator.last_error or 'None'}")
     print(f"filter_decision: {filter_result.decision}")
     print(f"filter_reasons: {filter_result.reasons}")
-    print(f"generated_sql: {sql}")
+    print(f"generated_sql: {generated_sql}")
+    print(f"rewrite_applied: {rewrite.rewritten}")
+    print(f"rewrite_reasons: {rewrite.reasons}")
+    print(f"final_sql: {final_sql}")
     print(f"validation_allowed: {validation.allowed}")
     print(f"validation_reasons: {validation.reasons}")
     if execution is None:

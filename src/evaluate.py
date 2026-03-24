@@ -11,6 +11,7 @@ from pathlib import Path
 
 from input_filter import InputFilter
 from model_probe import ModelProbe
+from query_rewriter import QueryRewriter
 from safe_executor import SafeExecutor
 from sql_validator import SQLValidator
 from text2sql import Text2SQLGenerator
@@ -93,12 +94,19 @@ def determine_observed_behavior(result: dict) -> str:
 def build_decision_trace(result: dict) -> list[str]:
     trace: list[str] = []
     filter_result = result["filter"]
+    rewrite = result["rewrite"]
     validation = result["validation"]
     execution = result["execution"]
 
     trace.append(f"input_filter={filter_result['decision']}")
     if filter_result["reasons"]:
         trace.extend([f"filter_reason={reason}" for reason in filter_result["reasons"]])
+
+    if rewrite["rewritten"]:
+        trace.append("rewrite=applied")
+        trace.extend([f"rewrite_reason={reason}" for reason in rewrite["reasons"]])
+    else:
+        trace.append("rewrite=none")
 
     trace.append(f"sql_validation={'allow' if validation['allowed'] else 'block'}")
     if validation["reasons"]:
@@ -137,6 +145,7 @@ def build_summary(results: list[dict]) -> dict:
     backend_counts: Counter[str] = Counter()
     fallback_cases = 0
     backend_errors = 0
+    rewrite_count = 0
 
     for item in results:
         observed = determine_observed_behavior(item)
@@ -148,6 +157,8 @@ def build_summary(results: list[dict]) -> dict:
             fallback_cases += 1
         if item["generator_error"]:
             backend_errors += 1
+        if item["rewrite"]["rewritten"]:
+            rewrite_count += 1
 
         if item["filter"]["decision"] == "warn":
             warnings += 1
@@ -176,6 +187,7 @@ def build_summary(results: list[dict]) -> dict:
         "backend_counts": dict(backend_counts),
         "fallback_rate": fallback_cases / total if total else 0.0,
         "backend_error_rate": backend_errors / total if total else 0.0,
+        "rewrite_rate": rewrite_count / total if total else 0.0,
     }
 
 
@@ -193,6 +205,7 @@ def write_report(results: list[dict], summary: dict, report_path: Path) -> None:
         f"- Backend counts: `{summary['backend_counts']}`",
         f"- Fallback rate: {summary['fallback_rate']:.2f}",
         f"- Backend error rate: {summary['backend_error_rate']:.2f}",
+        f"- Rewrite rate: {summary['rewrite_rate']:.2f}",
         "",
         "## Cases",
     ]
@@ -206,7 +219,8 @@ def write_report(results: list[dict], summary: dict, report_path: Path) -> None:
                 f"- Backend: `{item['generator_backend']}`",
                 f"- Requested backend: `{item['requested_backend']}`",
                 f"- Backend error: `{item['generator_error'] or 'None'}`",
-                f"- SQL: `{item['sql']}`",
+                f"- Generated SQL: `{item['generated_sql']}`",
+                f"- Final SQL: `{item['final_sql']}`",
                 f"- Expected: `{item['expected_behavior']}`",
                 f"- Observed: `{observed}`",
                 f"- Validation allowed: `{item['validation']['allowed']}`",
@@ -223,6 +237,7 @@ def run(mode: str = "full", remote_delay_seconds: float = 0.0) -> tuple[list[dic
 
     input_filter = InputFilter()
     generator = Text2SQLGenerator(load_schema_text())
+    rewriter = QueryRewriter(str(POLICY_PATH))
     validator = SQLValidator(str(POLICY_PATH))
     executor = SafeExecutor(str(DB_PATH))
     probe = ModelProbe()
@@ -242,11 +257,13 @@ def run(mode: str = "full", remote_delay_seconds: float = 0.0) -> tuple[list[dic
             filter_result = input_filter.assess(question)
 
             generated_sql = generator.generate(question)
-            validation_result = validator.validate(generated_sql)
+            rewrite_result = rewriter.rewrite(generated_sql)
+            final_sql = rewrite_result.sql if rewrite_result.rewritten else generated_sql
+            validation_result = validator.validate(final_sql)
 
             execution = None
             if filter_result.decision != "block" and validation_result.allowed:
-                execution = executor.execute(generated_sql)
+                execution = executor.execute(final_sql)
 
             probe_result = None
             if prompt_file == "triggers.json":
@@ -263,7 +280,9 @@ def run(mode: str = "full", remote_delay_seconds: float = 0.0) -> tuple[list[dic
                     "generator_backend": generator.backend,
                     "requested_backend": generator.requested_backend,
                     "generator_error": generator.last_error,
-                    "sql": generated_sql,
+                    "generated_sql": generated_sql,
+                    "rewrite": rewrite_result.__dict__,
+                    "final_sql": final_sql,
                     "validation": validation_result.__dict__,
                     "execution": None if execution is None else execution.__dict__,
                     "probe": probe_result,
