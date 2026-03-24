@@ -10,6 +10,7 @@ from collections import Counter
 from pathlib import Path
 
 from input_filter import InputFilter
+from intent_validator import IntentValidator
 from model_probe import ModelProbe
 from query_rewriter import QueryRewriter
 from safe_executor import SafeExecutor
@@ -82,6 +83,8 @@ def build_output_paths(mode: str, requested_backend: str, model_name: str) -> tu
 def determine_observed_behavior(result: dict) -> str:
     if result["filter"]["decision"] == "block":
         return "block"
+    if not result["intent"]["allowed"]:
+        return "block"
     if result["filter"]["decision"] == "warn":
         return "warn"
     if result["execution"] and result["execution"]["executed"]:
@@ -96,6 +99,7 @@ def build_decision_trace(result: dict) -> list[str]:
     filter_result = result["filter"]
     rewrite = result["rewrite"]
     validation = result["validation"]
+    intent = result["intent"]
     execution = result["execution"]
 
     trace.append(f"input_filter={filter_result['decision']}")
@@ -111,6 +115,14 @@ def build_decision_trace(result: dict) -> list[str]:
     trace.append(f"sql_validation={'allow' if validation['allowed'] else 'block'}")
     if validation["reasons"]:
         trace.extend([f"validation_reason={reason}" for reason in validation["reasons"]])
+    if validation.get("notes"):
+        trace.extend([f"validation_note={note}" for note in validation["notes"]])
+
+    trace.append(f"intent_validation={'allow' if intent['allowed'] else 'block'}")
+    if intent["reasons"]:
+        trace.extend([f"intent_reason={reason}" for reason in intent["reasons"]])
+    if intent.get("notes"):
+        trace.extend([f"intent_note={note}" for note in intent["notes"]])
 
     if execution is None:
         trace.append("execution=skipped")
@@ -121,7 +133,9 @@ def build_decision_trace(result: dict) -> list[str]:
 
     if result["probe"] is not None:
         trace.append(f"probe_suspicious={result['probe']['suspicious']}")
-        trace.append(f"probe_reason={result['probe']['reason']}")
+        trace.extend([f"probe_reason={reason}" for reason in result["probe"]["reasons"]])
+        if result["probe"].get("categories"):
+            trace.extend([f"probe_category={category}" for category in result["probe"]["categories"]])
 
     return trace
 
@@ -146,6 +160,7 @@ def build_summary(results: list[dict]) -> dict:
     fallback_cases = 0
     backend_errors = 0
     rewrite_count = 0
+    intent_blocked = 0
 
     for item in results:
         observed = determine_observed_behavior(item)
@@ -159,6 +174,8 @@ def build_summary(results: list[dict]) -> dict:
             backend_errors += 1
         if item["rewrite"]["rewritten"]:
             rewrite_count += 1
+        if not item["intent"]["allowed"]:
+            intent_blocked += 1
 
         if item["filter"]["decision"] == "warn":
             warnings += 1
@@ -188,6 +205,7 @@ def build_summary(results: list[dict]) -> dict:
         "fallback_rate": fallback_cases / total if total else 0.0,
         "backend_error_rate": backend_errors / total if total else 0.0,
         "rewrite_rate": rewrite_count / total if total else 0.0,
+        "intent_block_rate": intent_blocked / total if total else 0.0,
     }
 
 
@@ -206,6 +224,7 @@ def write_report(results: list[dict], summary: dict, report_path: Path) -> None:
         f"- Fallback rate: {summary['fallback_rate']:.2f}",
         f"- Backend error rate: {summary['backend_error_rate']:.2f}",
         f"- Rewrite rate: {summary['rewrite_rate']:.2f}",
+        f"- Intent block rate: {summary['intent_block_rate']:.2f}",
         "",
         "## Cases",
     ]
@@ -224,6 +243,7 @@ def write_report(results: list[dict], summary: dict, report_path: Path) -> None:
                 f"- Expected: `{item['expected_behavior']}`",
                 f"- Observed: `{observed}`",
                 f"- Validation allowed: `{item['validation']['allowed']}`",
+                f"- Intent allowed: `{item['intent']['allowed']}`",
                 f"- Trace: `{' | '.join(build_decision_trace(item))}`",
                 "",
             ]
@@ -239,6 +259,7 @@ def run(mode: str = "full", remote_delay_seconds: float = 0.0) -> tuple[list[dic
     generator = Text2SQLGenerator(load_schema_text())
     rewriter = QueryRewriter(str(POLICY_PATH))
     validator = SQLValidator(str(POLICY_PATH))
+    intent_validator = IntentValidator()
     executor = SafeExecutor(str(DB_PATH))
     probe = ModelProbe()
     results_path, summary_path, report_path = build_output_paths(
@@ -260,16 +281,24 @@ def run(mode: str = "full", remote_delay_seconds: float = 0.0) -> tuple[list[dic
             rewrite_result = rewriter.rewrite(generated_sql)
             final_sql = rewrite_result.sql if rewrite_result.rewritten else generated_sql
             validation_result = validator.validate(final_sql)
+            intent_result = intent_validator.validate(question, validation_result.normalized_sql)
 
+            executable_sql = validation_result.normalized_sql
             execution = None
-            if filter_result.decision != "block" and validation_result.allowed:
-                execution = executor.execute(final_sql)
+            if filter_result.decision != "block" and validation_result.allowed and intent_result.allowed:
+                execution = executor.execute(executable_sql)
 
             probe_result = None
             if prompt_file == "triggers.json":
                 clean_question = question.replace("??", "").replace("::", "").strip()
                 clean_sql = generator.generate(clean_question)
-                probe_result = probe.compare(clean_sql, generated_sql).__dict__
+                clean_intent = intent_validator.validate(clean_question, clean_sql)
+                probe_result = probe.compare(
+                    clean_sql,
+                    generated_sql,
+                    clean_intent_allowed=clean_intent.allowed,
+                    triggered_intent_allowed=intent_result.allowed,
+                ).__dict__
 
             results.append(
                 {
@@ -283,7 +312,9 @@ def run(mode: str = "full", remote_delay_seconds: float = 0.0) -> tuple[list[dic
                     "generated_sql": generated_sql,
                     "rewrite": rewrite_result.__dict__,
                     "final_sql": final_sql,
+                    "executable_sql": executable_sql,
                     "validation": validation_result.__dict__,
+                    "intent": intent_result.__dict__,
                     "execution": None if execution is None else execution.__dict__,
                     "probe": probe_result,
                     "expected_behavior": item["expected_behavior"],

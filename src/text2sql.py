@@ -13,8 +13,12 @@ class RuleBasedGenerator:
     def generate(self, question: str) -> str:
         lower = question.lower()
 
+        if "total number" in lower or "count" in lower or "how many" in lower:
+            return "SELECT COUNT(*) FROM patients"
         if "older than 30" in lower:
             return "SELECT name, age FROM patients WHERE age > 30"
+        if "patient names" in lower and "age" not in lower:
+            return "SELECT name FROM patients"
         if "all patient names and ages" in lower or "all patient names" in lower:
             return "SELECT name, age FROM patients"
         if "show all" in lower:

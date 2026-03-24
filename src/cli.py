@@ -6,6 +6,7 @@ from pathlib import Path
 
 from evaluate import load_schema_text
 from input_filter import InputFilter
+from intent_validator import IntentValidator
 from query_rewriter import QueryRewriter
 from safe_executor import SafeExecutor
 from sql_validator import SQLValidator
@@ -36,6 +37,7 @@ def main() -> None:
     generator = Text2SQLGenerator(load_schema_text())
     rewriter = QueryRewriter(str(POLICY_PATH))
     validator = SQLValidator(str(POLICY_PATH))
+    intent_validator = IntentValidator()
     executor = SafeExecutor(str(DB_PATH))
 
     filter_result = input_filter.assess(args.question)
@@ -43,9 +45,11 @@ def main() -> None:
     rewrite = rewriter.rewrite(generated_sql)
     final_sql = rewrite.sql if rewrite.rewritten else generated_sql
     validation = validator.validate(final_sql)
+    intent = intent_validator.validate(args.question, validation.normalized_sql)
+    executable_sql = validation.normalized_sql
     execution = None
-    if filter_result.decision != "block" and validation.allowed:
-        execution = executor.execute(final_sql)
+    if filter_result.decision != "block" and validation.allowed and intent.allowed:
+        execution = executor.execute(executable_sql)
 
     print(f"backend: {generator.backend}")
     print(f"requested_backend: {generator.requested_backend}")
@@ -56,8 +60,13 @@ def main() -> None:
     print(f"rewrite_applied: {rewrite.rewritten}")
     print(f"rewrite_reasons: {rewrite.reasons}")
     print(f"final_sql: {final_sql}")
+    print(f"executable_sql: {executable_sql}")
     print(f"validation_allowed: {validation.allowed}")
     print(f"validation_reasons: {validation.reasons}")
+    print(f"validation_notes: {validation.notes}")
+    print(f"intent_allowed: {intent.allowed}")
+    print(f"intent_reasons: {intent.reasons}")
+    print(f"intent_notes: {intent.notes}")
     if execution is None:
         print("execution: skipped")
     else:

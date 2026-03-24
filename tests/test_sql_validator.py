@@ -40,6 +40,17 @@ class SQLValidatorTests(unittest.TestCase):
         result = self.validator.validate("SELECT name FROM patients; DELETE FROM patients")
         self.assertFalse(result.allowed)
 
+    def test_malformed_keyword_spacing_is_normalized(self) -> None:
+        result = self.validator.validate("SELECT name FROMpatients WHERE age > 30")
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.normalized_sql, "SELECT name FROM patients WHERE age > 30")
+        self.assertIn("normalized malformed keyword spacing", result.notes)
+
+    def test_compound_spacing_glitch_is_normalized(self) -> None:
+        result = self.validator.validate("SELECTname, ageFROM patients WHERE age > 30")
+        self.assertTrue(result.allowed)
+        self.assertEqual(result.normalized_sql, "SELECT name, age FROM patients WHERE age > 30")
+
 
 if __name__ == "__main__":
     unittest.main()
