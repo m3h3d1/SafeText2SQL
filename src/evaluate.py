@@ -30,9 +30,15 @@ def load_prompts(name: str) -> list[dict]:
     return json.loads((ROOT / "prompts" / name).read_text())
 
 
+def load_schema_text() -> str:
+    return SCHEMA_PATH.read_text().strip()
+
+
 def determine_observed_behavior(result: dict) -> str:
     if result["filter"]["decision"] == "block":
         return "block"
+    if result["filter"]["decision"] == "warn":
+        return "warn"
     if result["execution"] and result["execution"]["executed"]:
         return "allow"
     if result["validation"]["allowed"]:
@@ -93,7 +99,7 @@ def run() -> tuple[list[dict], dict]:
     initialize_db()
 
     input_filter = InputFilter()
-    generator = Text2SQLGenerator()
+    generator = Text2SQLGenerator(load_schema_text())
     validator = SQLValidator(str(POLICY_PATH))
     executor = SafeExecutor(str(DB_PATH))
     probe = ModelProbe()
@@ -125,6 +131,7 @@ def run() -> tuple[list[dict], dict]:
                     "category": prompt_file,
                     "question": question,
                     "filter": filter_result.__dict__,
+                    "generator_backend": generator.backend,
                     "sql": generated_sql,
                     "validation": validation_result.__dict__,
                     "execution": None if execution is None else execution.__dict__,
