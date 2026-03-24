@@ -20,7 +20,12 @@ class InputFilter:
             r"(?i)\bdrop\b",
             r"(?i)\bdelete\b",
             r"(?i)\bignore the rules\b",
+            r"(?i)\bignore previous instructions\b",
             r"(?i)\bbypass\b",
+            r"(?i)\bsleep\s*\(",
+            r"(?i)\bshutdown\b",
+            r"/\*",
+            r"\*/",
             r"--",
         ]
         self.warn_terms = [
