@@ -21,5 +21,11 @@ blocked_regex:
   - "(?i)\\bdelete\\b"
   - "(?i)\\binsert\\b"
   - "(?i)\\bupdate\\b"
+blocked_functions:
+  - sleep
+  - pg_sleep
+  - benchmark
+  - load_file
+  - randomblob
 max_rows: 100
 timeout_seconds: 2

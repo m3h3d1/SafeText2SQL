@@ -113,6 +113,7 @@ def build_decision_trace(result: dict) -> list[str]:
         trace.append("rewrite=none")
 
     trace.append(f"sql_validation={'allow' if validation['allowed'] else 'block'}")
+    trace.append(f"sql_risk_score={validation['risk_score']}")
     if validation["reasons"]:
         trace.extend([f"validation_reason={reason}" for reason in validation["reasons"]])
     if validation.get("notes"):
@@ -243,6 +244,7 @@ def write_report(results: list[dict], summary: dict, report_path: Path) -> None:
                 f"- Expected: `{item['expected_behavior']}`",
                 f"- Observed: `{observed}`",
                 f"- Validation allowed: `{item['validation']['allowed']}`",
+                f"- Validation risk score: `{item['validation']['risk_score']}`",
                 f"- Intent allowed: `{item['intent']['allowed']}`",
                 f"- Trace: `{' | '.join(build_decision_trace(item))}`",
                 "",

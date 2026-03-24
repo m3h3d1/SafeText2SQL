@@ -15,6 +15,7 @@ class ValidationResult:
     reasons: list[str]
     normalized_sql: str
     notes: list[str]
+    risk_score: int
 
 
 class SQLValidator:
@@ -35,6 +36,9 @@ class SQLValidator:
 
     def __init__(self, policy_path: str) -> None:
         self.policy = yaml.safe_load(Path(policy_path).read_text())
+
+    def _bump_risk(self, current: int, amount: int) -> int:
+        return min(10, current + amount)
 
     def _collapse_whitespace(self, sql: str) -> str:
         return re.sub(r"\s+", " ", sql).strip()
@@ -71,32 +75,53 @@ class SQLValidator:
     def validate(self, sql: str) -> ValidationResult:
         reasons: list[str] = []
         normalized_sql, notes = self._normalize_sql(sql)
+        risk_score = 0
 
         for token in self.policy.get("blocked_tokens", []):
             if token in normalized_sql:
                 reasons.append(f"blocked token detected: {token}")
+                risk_score = self._bump_risk(risk_score, 3)
 
         for pattern in self.policy.get("blocked_regex", []):
             if re.search(pattern, normalized_sql):
                 reasons.append(f"blocked pattern detected: {pattern}")
+                risk_score = self._bump_risk(risk_score, 4)
 
         try:
             tree = sqlglot.parse_one(normalized_sql, read="sqlite")
         except Exception as exc:  # pragma: no cover - starter scaffold
-            return ValidationResult(False, [f"parse error: {exc}"], normalized_sql, notes)
+            return ValidationResult(False, [f"parse error: {exc}"], normalized_sql, notes, 10)
 
         if not isinstance(tree, exp.Select):
             reasons.append("only SELECT statements are allowed")
+            risk_score = self._bump_risk(risk_score, 5)
 
         if not self.policy.get("allow_wildcard_select", True):
             for select_expression in tree.expressions:
                 if isinstance(select_expression, exp.Star):
                     reasons.append("wildcard select is not allowed")
+                    risk_score = self._bump_risk(risk_score, 2)
+
+        blocked_functions = {name.lower() for name in self.policy.get("blocked_functions", [])}
+        for function in tree.find_all(exp.Func):
+            function_name = ""
+            if getattr(function, "name", None):
+                function_name = str(function.name).lower()
+            elif getattr(function, "this", None):
+                function_name = str(function.this).lower()
+            elif function.sql_name():
+                function_name = function.sql_name().lower()
+            else:
+                function_name = function.__class__.__name__.lower()
+            if function_name in blocked_functions:
+                reasons.append(f"blocked function detected: {function_name}")
+                risk_score = self._bump_risk(risk_score, 4)
 
         allowed_tables = set(self.policy.get("allowed_tables", []))
         for table in tree.find_all(exp.Table):
             if table.name not in allowed_tables:
                 reasons.append(f"table not allowed: {table.name}")
+                risk_score = self._bump_risk(risk_score, 5)
 
         allowed_columns = self.policy.get("allowed_columns", {})
         for column in tree.find_all(exp.Column):
@@ -104,10 +129,15 @@ class SQLValidator:
             allowed = set(allowed_columns.get(table_name, []))
             if allowed and column.name not in allowed:
                 reasons.append(f"column not allowed: {table_name}.{column.name}")
+                risk_score = self._bump_risk(risk_score, 3)
+
+        if notes and not reasons:
+            risk_score = self._bump_risk(risk_score, 1)
 
         return ValidationResult(
             allowed=not reasons,
             reasons=reasons,
             normalized_sql=normalized_sql,
             notes=notes,
+            risk_score=risk_score,
         )
