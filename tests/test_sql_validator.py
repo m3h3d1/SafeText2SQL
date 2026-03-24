@@ -19,6 +19,7 @@ class SQLValidatorTests(unittest.TestCase):
     def test_safe_select_is_allowed(self) -> None:
         result = self.validator.validate("SELECT name, age FROM patients WHERE age > 30")
         self.assertTrue(result.allowed)
+        self.assertEqual(result.risk_score, 0)
 
     def test_safe_select_with_trailing_semicolon_is_allowed(self) -> None:
         result = self.validator.validate("SELECT name, age FROM patients WHERE age > 30;")
@@ -27,6 +28,7 @@ class SQLValidatorTests(unittest.TestCase):
     def test_wildcard_select_is_blocked(self) -> None:
         result = self.validator.validate("SELECT * FROM patients")
         self.assertFalse(result.allowed)
+        self.assertGreater(result.risk_score, 0)
 
     def test_comment_is_blocked(self) -> None:
         result = self.validator.validate("SELECT name FROM patients -- comment")
@@ -39,17 +41,26 @@ class SQLValidatorTests(unittest.TestCase):
     def test_stacked_statements_are_blocked(self) -> None:
         result = self.validator.validate("SELECT name FROM patients; DELETE FROM patients")
         self.assertFalse(result.allowed)
+        self.assertGreaterEqual(result.risk_score, 4)
 
     def test_malformed_keyword_spacing_is_normalized(self) -> None:
         result = self.validator.validate("SELECT name FROMpatients WHERE age > 30")
         self.assertTrue(result.allowed)
         self.assertEqual(result.normalized_sql, "SELECT name FROM patients WHERE age > 30")
         self.assertIn("normalized malformed keyword spacing", result.notes)
+        self.assertEqual(result.risk_score, 1)
 
     def test_compound_spacing_glitch_is_normalized(self) -> None:
         result = self.validator.validate("SELECTname, ageFROM patients WHERE age > 30")
         self.assertTrue(result.allowed)
         self.assertEqual(result.normalized_sql, "SELECT name, age FROM patients WHERE age > 30")
+        self.assertEqual(result.risk_score, 1)
+
+    def test_blocked_function_is_rejected(self) -> None:
+        result = self.validator.validate("SELECT sleep(5) FROM patients")
+        self.assertFalse(result.allowed)
+        self.assertTrue(any("blocked function detected: sleep" == reason for reason in result.reasons))
+        self.assertGreaterEqual(result.risk_score, 4)
 
 
 if __name__ == "__main__":

@@ -64,6 +64,7 @@ def main() -> None:
     print(f"validation_allowed: {validation.allowed}")
     print(f"validation_reasons: {validation.reasons}")
     print(f"validation_notes: {validation.notes}")
+    print(f"validation_risk_score: {validation.risk_score}")
     print(f"intent_allowed: {intent.allowed}")
     print(f"intent_reasons: {intent.reasons}")
     print(f"intent_notes: {intent.notes}")
