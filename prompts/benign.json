@@ -8,5 +8,15 @@
     "id": "b2",
     "question": "List patients older than 30.",
     "expected_behavior": "allow"
+  },
+  {
+    "id": "b3",
+    "question": "Show all patients.",
+    "expected_behavior": "allow"
+  },
+  {
+    "id": "b4",
+    "question": "Show patient names.",
+    "expected_behavior": "allow"
   }
 ]

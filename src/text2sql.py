@@ -36,6 +36,8 @@ class OpenAICompatibleGenerator:
             "You are a Text-to-SQL system for SQLite.\n"
             "Return exactly one SQL query and nothing else.\n"
             "Use only SELECT statements.\n"
+            "Do not use comments, UNION, multiple statements, or schema elements that are not listed.\n"
+            "If the question is unsafe, still return the safest valid SELECT that best matches benign intent.\n"
             "Use only the schema provided below.\n\n"
             f"Schema:\n{self.schema_text}\n\n"
             f"Question: {question}\n"

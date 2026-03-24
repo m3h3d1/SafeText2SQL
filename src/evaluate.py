@@ -17,6 +17,7 @@ SCHEMA_PATH = ROOT / "data" / "schema.sql"
 POLICY_PATH = ROOT / "config" / "policy.yaml"
 RESULTS_PATH = ROOT / "results" / "evaluation.json"
 SUMMARY_PATH = ROOT / "results" / "summary.json"
+REPORT_PATH = ROOT / "results" / "report.md"
 
 
 def initialize_db() -> None:
@@ -44,6 +45,34 @@ def determine_observed_behavior(result: dict) -> str:
     if result["validation"]["allowed"]:
         return "warn"
     return "block"
+
+
+def build_decision_trace(result: dict) -> list[str]:
+    trace: list[str] = []
+    filter_result = result["filter"]
+    validation = result["validation"]
+    execution = result["execution"]
+
+    trace.append(f"input_filter={filter_result['decision']}")
+    if filter_result["reasons"]:
+        trace.extend([f"filter_reason={reason}" for reason in filter_result["reasons"]])
+
+    trace.append(f"sql_validation={'allow' if validation['allowed'] else 'block'}")
+    if validation["reasons"]:
+        trace.extend([f"validation_reason={reason}" for reason in validation["reasons"]])
+
+    if execution is None:
+        trace.append("execution=skipped")
+    elif execution["executed"]:
+        trace.append("execution=allowed")
+    else:
+        trace.append(f"execution=failed:{execution['error']}")
+
+    if result["probe"] is not None:
+        trace.append(f"probe_suspicious={result['probe']['suspicious']}")
+        trace.append(f"probe_reason={result['probe']['reason']}")
+
+    return trace
 
 
 def expected_behavior_matches(expected: str, observed: str) -> bool:
@@ -95,6 +124,40 @@ def build_summary(results: list[dict]) -> dict:
     }
 
 
+def write_report(results: list[dict], summary: dict) -> None:
+    lines = [
+        "# SafeText2SQL Evaluation Report",
+        "",
+        "## Summary",
+        f"- Total cases: {summary['total_cases']}",
+        f"- Match rate: {summary['match_rate']:.2f}",
+        f"- Clean accuracy: {summary['clean_accuracy']:.2f}",
+        f"- Injection block rate: {summary['injection_block_rate']:.2f}",
+        f"- Trigger flag rate: {summary['trigger_flag_rate']:.2f}",
+        f"- Warning rate: {summary['warning_rate']:.2f}",
+        "",
+        "## Cases",
+    ]
+
+    for item in results:
+        observed = determine_observed_behavior(item)
+        lines.extend(
+            [
+                f"### {item['id']} ({item['category']})",
+                f"- Question: `{item['question']}`",
+                f"- Backend: `{item['generator_backend']}`",
+                f"- SQL: `{item['sql']}`",
+                f"- Expected: `{item['expected_behavior']}`",
+                f"- Observed: `{observed}`",
+                f"- Validation allowed: `{item['validation']['allowed']}`",
+                f"- Trace: `{' | '.join(build_decision_trace(item))}`",
+                "",
+            ]
+        )
+
+    REPORT_PATH.write_text("\n".join(lines))
+
+
 def run() -> tuple[list[dict], dict]:
     initialize_db()
 
@@ -137,12 +200,17 @@ def run() -> tuple[list[dict], dict]:
                     "execution": None if execution is None else execution.__dict__,
                     "probe": probe_result,
                     "expected_behavior": item["expected_behavior"],
+                    "observed_behavior": "",
                 }
             )
+
+    for item in results:
+        item["observed_behavior"] = determine_observed_behavior(item)
 
     RESULTS_PATH.write_text(json.dumps(results, indent=2))
     summary = build_summary(results)
     SUMMARY_PATH.write_text(json.dumps(summary, indent=2))
+    write_report(results, summary)
     return results, summary
 
 

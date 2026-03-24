@@ -25,6 +25,7 @@ SafeText2SQL is a small prototype for defending Text-to-SQL pipelines against:
 1. Install dependencies from `requirements.txt`.
 2. Initialize the SQLite database with `data/schema.sql`.
 3. Run `src/evaluate.py` to exercise the baseline pipeline.
+4. Run `src/cli.py "your question"` for a single interactive request.
 
 ## Model Backends
 - Default: rule-based fallback for local development.
@@ -35,9 +36,15 @@ Example:
 - set `SAFETEXT2SQL_BACKEND=openai`
 - set `OPENAI_API_KEY`
 - optionally set `OPENAI_BASE_URL` and `OPENAI_MODEL`
+- see [ENV_SETUP.md](/home/user/Downloads/ms/toxic/SafeText2SQL/docs/ENV_SETUP.md) for shell setup
+
+## Outputs
+- `results/evaluation.json` detailed per-case results
+- `results/summary.json` aggregate metrics
+- `results/report.md` human-readable evaluation report
 
 ## Current Scope
 - SQLite only
 - Read-only `SELECT` queries
 - Rule-based baseline defenses
-- Small demo prompt sets
+- small benchmark with benign, injection, and trigger cases
