@@ -1,0 +1,1 @@
+"""SafeText2SQL package."""
