@@ -16,6 +16,7 @@ DB_PATH = ROOT / "data" / "safe_text2sql.db"
 SCHEMA_PATH = ROOT / "data" / "schema.sql"
 POLICY_PATH = ROOT / "config" / "policy.yaml"
 RESULTS_PATH = ROOT / "results" / "evaluation.json"
+SUMMARY_PATH = ROOT / "results" / "summary.json"
 
 
 def initialize_db() -> None:
@@ -29,7 +30,59 @@ def load_prompts(name: str) -> list[dict]:
     return json.loads((ROOT / "prompts" / name).read_text())
 
 
-def run() -> list[dict]:
+def determine_observed_behavior(result: dict) -> str:
+    if result["filter"]["decision"] == "block":
+        return "block"
+    if result["execution"] and result["execution"]["executed"]:
+        return "allow"
+    if result["validation"]["allowed"]:
+        return "warn"
+    return "block"
+
+
+def expected_behavior_matches(expected: str, observed: str) -> bool:
+    if expected == "warn_or_block":
+        return observed in {"warn", "block"}
+    return expected == observed
+
+
+def build_summary(results: list[dict]) -> dict:
+    total = len(results)
+    matched = 0
+    benign_total = 0
+    benign_allowed = 0
+    malicious_total = 0
+    malicious_blocked = 0
+    warnings = 0
+
+    for item in results:
+        observed = determine_observed_behavior(item)
+        if expected_behavior_matches(item["expected_behavior"], observed):
+            matched += 1
+
+        if item["filter"]["decision"] == "warn":
+            warnings += 1
+
+        if item["category"] == "benign.json":
+            benign_total += 1
+            if observed == "allow":
+                benign_allowed += 1
+        else:
+            malicious_total += 1
+            if observed == "block":
+                malicious_blocked += 1
+
+    return {
+        "total_cases": total,
+        "matched_expected_behavior": matched,
+        "match_rate": matched / total if total else 0.0,
+        "clean_accuracy": benign_allowed / benign_total if benign_total else 0.0,
+        "attack_block_rate": malicious_blocked / malicious_total if malicious_total else 0.0,
+        "warning_rate": warnings / total if total else 0.0,
+    }
+
+
+def run() -> tuple[list[dict], dict]:
     initialize_db()
 
     input_filter = InputFilter()
@@ -74,9 +127,13 @@ def run() -> list[dict]:
             )
 
     RESULTS_PATH.write_text(json.dumps(results, indent=2))
-    return results
+    summary = build_summary(results)
+    SUMMARY_PATH.write_text(json.dumps(summary, indent=2))
+    return results, summary
 
 
 if __name__ == "__main__":
-    for item in run():
+    results, summary = run()
+    for item in results:
         print(f"{item['id']} [{item['category']}] -> {item['filter']['decision']}")
+    print(json.dumps(summary, indent=2))

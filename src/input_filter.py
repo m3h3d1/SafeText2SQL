@@ -14,7 +14,7 @@ class InputFilterResult:
 class InputFilter:
     def __init__(self) -> None:
         self.repeated_punctuation = [r"\?\?", r"::", r";;"]
-        self.suspicious_terms = [
+        self.block_terms = [
             r"(?i)\bor\s+1=1\b",
             r"(?i)\bunion\b",
             r"(?i)\bdrop\b",
@@ -23,22 +23,34 @@ class InputFilter:
             r"(?i)\bbypass\b",
             r"--",
         ]
+        self.warn_terms = [
+            r"(?i)\bcomment\b",
+            r"(?i)\bsemicolon\b",
+            r"(?i)\btrigger\b",
+        ]
 
     def assess(self, question: str) -> InputFilterResult:
         score = 0
         reasons: list[str] = []
+        hard_block = False
 
         for pattern in self.repeated_punctuation:
             if re.search(pattern, question):
                 score += 1
                 reasons.append(f"trigger-like punctuation: {pattern}")
 
-        for pattern in self.suspicious_terms:
+        for pattern in self.block_terms:
             if re.search(pattern, question):
-                score += 2
-                reasons.append(f"suspicious term: {pattern}")
+                score += 3
+                hard_block = True
+                reasons.append(f"blocked term: {pattern}")
 
-        if score >= 3:
+        for pattern in self.warn_terms:
+            if re.search(pattern, question):
+                score += 1
+                reasons.append(f"warning term: {pattern}")
+
+        if hard_block or score >= 3:
             decision = "block"
         elif score > 0:
             decision = "warn"
